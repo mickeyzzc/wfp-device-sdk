@@ -37,3 +37,6 @@ CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
 .sisyphus
+
+# 本地工作笔记不入库
+AGENTS.md
