@@ -1,6 +1,8 @@
-# Name,    Type, SubType,  Offset,   Size,    Flags
-# Note: if you have increased the bootloader size, make sure to update the offsets to avoid overlap
+# Name,    Type, SubType,  Offset,   Size,     Flags
+# OTA 双槽（web 刷机写备用槽→重启切换）；nvs/phy 位置不变，storage 移位
 nvs,        data, nvs,      0x9000,   0x4000,
 phy_init,   data, phy,      0xd000,   0x1000,
-factory,    app,  factory,  0x10000,  0x1E0000,
-storage,    data, spiffs,   0x340000, 0xC0000,
+otadata,    data, ota,      0xe000,   0x2000,
+ota_0,      app,  ota_0,    0x10000,  0x150000,
+ota_1,      app,  ota_1,    0x160000, 0x150000,
+storage,    data, spiffs,   0x2b0000, 0x150000,

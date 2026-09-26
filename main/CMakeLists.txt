@@ -36,4 +36,5 @@ idf_component_register(
         mbedtls               # TLS/SSL 加密库
         spiffs                # SPIFFS 文件系统
         esp_driver_gpio        # GPIO 驱动（LED 控制）
+        app_update             # OTA 分区写入（web 刷机）
 )

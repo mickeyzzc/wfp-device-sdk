@@ -10,12 +10,15 @@
  *   GET  /      → 暗色主题 WiFi 配置页面
  *   GET  /scan  → WiFi 扫描结果 JSON
  *   POST /save  → 保存 WiFi 凭证到 NVS
+ *   POST /ota   → 固件上传（OTA 双槽，救援通道）
  *
  * STA 模式:
  *   GET  /            → 配置管理仪表板
  *   GET  /api/status  → 设备状态 JSON
  *   POST /api/config  → 更新配置 JSON
  *   POST /api/reload  → 热加载配置
+ *   POST /ota         → 固件上传（流式写 OTA 槽→校验→切槽→延迟重启）
+ *   POST /api/reboot  → 重启设备
  */
 
 #include "web_server.h"
@@ -29,6 +32,8 @@
 #include "esp_wifi.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "esp_ota_ops.h"
+#include "esp_app_desc.h"
 #include "lwip/netdb.h"
 #include "cJSON.h"
 
@@ -87,7 +92,13 @@ static const char CONFIG_HTML[] =
 "<label>Password</label>"
 "<input type='password' id='p' placeholder='WiFi password'>"
 "<button class='btn bp' type='submit'>Save &amp; Restart</button>"
-"</form></div>"
+"</form>"
+"<label>Firmware (.bin)</label>"
+"<input type='file' id='fw' accept='.bin'>"
+"<button class='btn bs' type='button' onclick='ota()'>Upload &amp; Flash</button>"
+"<div style='height:8px;background:#233554;border-radius:4px;margin-top:8px;overflow:hidden'>"
+"<div id='bar' style='height:100%;width:0;background:#0f9b58'></div></div>"
+"</div>"
 "<script>"
 "function scan(){var b=document.getElementById('sb'),n=document.getElementById('nets');"
 "b.disabled=true;b.textContent='Scanning...';n.innerHTML='';"
@@ -114,6 +125,12 @@ static const char CONFIG_HTML[] =
 "x.send(JSON.stringify({ssid:s,password:p}))}"
 "function msg(t,c){var m=document.getElementById('m');m.textContent=t;m.className='msg '+c}"
 "function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}"
+"function ota(){var f=document.getElementById('fw').files[0];if(!f){msg('Select .bin','er');return}"
+"var x=new XMLHttpRequest();x.open('POST','/ota');"
+"x.upload.onprogress=function(e){document.getElementById('bar').style.width=(100*e.loaded/e.total)+'%'};"
+"x.onload=function(){if(x.status===200){msg('OK! Rebooting...','ok');"
+"setTimeout(function(){location.reload()},20000)}else msg('Flash failed','er')};"
+"x.onerror=function(){msg('Network error','er')};x.send(f)}"
 "</script></body></html>";
 
 /* ---- AP: GET / ---- */
@@ -268,6 +285,7 @@ static const char DASHBOARD_HTML[] =
 "<div class='cd'><h2>Device Info</h2>"
 "<div class='row'><span class='l'>IP Address</span><span class='v' id='ip'>-</span></div>"
 "<div class='row'><span class='l'>WiFi SSID</span><span class='v' id='ssid'>-</span></div>"
+"<div class='row'><span class='l'>Firmware</span><span class='v' id='fwv'>-</span></div>"
 "<div class='row'><span class='l'>Uptime</span><span class='v' id='up'>-</span></div>"
 "</div>"
 "<div class='cd'><h2>Config Summary</h2>"
@@ -286,7 +304,17 @@ static const char DASHBOARD_HTML[] =
 "<button class='btn bp' onclick='saveCfg()'>Save</button>"
 "<button class='btn bs' onclick='loadCfg()'>Reload</button>"
 "<button class='btn bg' onclick='hotReload()'>Hot Reload</button>"
-"</div></div></div>"
+"</div></div>"
+"<div class='cd full'><h2>Firmware Update (OTA)</h2>"
+"<input type='file' id='fw' accept='.bin' "
+"style='width:100%;padding:8px;background:#0f3460;border:1px solid #233554;border-radius:8px'>"
+"<div class='btns'>"
+"<button class='btn bp' onclick='otaGo()'>Upload &amp; Flash</button>"
+"<button class='btn bs' onclick='doReboot()'>Reboot</button>"
+"</div>"
+"<div style='height:10px;background:#0f3460;border-radius:5px;margin-top:10px;overflow:hidden'>"
+"<div id='bar' style='height:100%;width:0;background:#0f9b58;transition:width .2s'></div></div>"
+"</div></div>"
 "<div class='flash' id='fl'></div>"
 "<script>"
 "function $(i){return document.getElementById(i)}"
@@ -298,6 +326,7 @@ static const char DASHBOARD_HTML[] =
 "function loadStatus(){var x=new XMLHttpRequest();"
 "x.onload=function(){if(x.status!==200)return;"
 "var d=JSON.parse(x.responseText);"
+"$('fwv').textContent=d.fw;"
 "$('up').textContent=fmt(d.uptime_s*1000);"
 "$('mc').textContent=d.modules;$('tc').textContent=d.targets;"
 "$('si').textContent=d.scrape_interval_s+'s';"
@@ -328,6 +357,15 @@ static const char DASHBOARD_HTML[] =
 "x.onerror=function(){fl('Network error','fer')};"
 "x.open('POST','/api/reload');x.send()}"
 "function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}"
+"function otaGo(){var f=$('fw').files[0];if(!f){fl('Select .bin file','fer');return}"
+"var x=new XMLHttpRequest();x.open('POST','/ota');"
+"x.upload.onprogress=function(e){$('bar').style.width=(100*e.loaded/e.total)+'%'};"
+"x.onload=function(){if(x.status===200){fl('OK! Rebooting...');"
+"setTimeout(function(){location.reload()},20000)}else fl('Flash failed','fer')};"
+"x.onerror=function(){fl('Network error','fer')};x.send(f)}"
+"function doReboot(){if(!confirm('Reboot?'))return;"
+"var x=new XMLHttpRequest();x.onload=function(){fl('Rebooting...')};"
+"x.open('POST','/api/reboot');x.send()}"
 "loadStatus();loadCfg();"
 "</script></body></html>";
 
@@ -359,7 +397,9 @@ static esp_err_t sta_status_handler(httpd_req_t *req)
     const probe_target_t *targets = probe_manager_get_targets(&tgt_count2);
 
     /* 构建 JSON */
+    const esp_app_desc_t *app = esp_app_get_description();
     cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "fw", app ? app->version : "?");
     cJSON_AddNumberToObject(root, "uptime_s", uptime_s);
     cJSON_AddNumberToObject(root, "modules", mod_count);
     cJSON_AddNumberToObject(root, "targets", tgt_count);
@@ -514,6 +554,87 @@ static esp_err_t sta_reload_handler(httpd_req_t *req)
 }
 
 /* ================================================================ */
+/*  OTA 刷机 / 重启（AP 与 STA 服务器共用，与 s3zero 项目同构）      */
+/* ================================================================ */
+
+/* 延迟重启：先把 HTTP 应答发完再 esp_restart（直接重启会吞响应） */
+static void web_reboot_cb(void *arg)
+{
+    (void)arg;
+    esp_restart();
+}
+
+static void web_schedule_reboot(int ms)
+{
+    static esp_timer_handle_t t;
+    if (!t) {
+        const esp_timer_create_args_t cfg = {
+            .callback = web_reboot_cb,
+            .name = "webreboot",
+        };
+        ESP_ERROR_CHECK(esp_timer_create(&cfg, &t));
+    }
+    esp_timer_stop(t); /* 幂等：重复触发只取最后一次 */
+    esp_timer_start_once(t, (uint64_t)ms * 1000);
+}
+
+/* ---- POST /ota：固件流式写备用 OTA 槽 → 校验 → 切槽 → 延迟重启 ----
+ * esp_ota_end 做镜像头/哈希校验，失败不切启动槽——原固件无损 */
+static esp_err_t ota_handler(httpd_req_t *req)
+{
+    static char buf[4096]; /* 静态收包缓冲（勿放大栈缓冲） */
+    if (req->content_len <= 0) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        return httpd_resp_send(req, "{\"status\":\"error\",\"msg\":\"empty body\"}", -1);
+    }
+    const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
+    if (!part) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        return httpd_resp_send(req, "{\"status\":\"error\",\"msg\":\"no ota partition\"}", -1);
+    }
+    esp_ota_handle_t ota;
+    if (esp_ota_begin(part, (size_t)req->content_len, &ota) != ESP_OK) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        return httpd_resp_send(req, "{\"status\":\"error\",\"msg\":\"ota begin failed\"}", -1);
+    }
+    ESP_LOGI(TAG_STA, "OTA 开始：目标槽 %s，%u 字节", part->label,
+             (unsigned)req->content_len);
+    size_t remain = (size_t)req->content_len;
+    while (remain > 0) {
+        int got = httpd_req_recv(req, buf, remain > sizeof(buf) ? sizeof(buf) : remain);
+        if (got <= 0) {
+            esp_ota_abort(ota);
+            httpd_resp_set_status(req, "500 Internal Server Error");
+            return httpd_resp_send(req, "{\"status\":\"error\",\"msg\":\"recv failed\"}", -1);
+        }
+        if (esp_ota_write(ota, buf, (size_t)got) != ESP_OK) {
+            esp_ota_abort(ota);
+            httpd_resp_set_status(req, "500 Internal Server Error");
+            return httpd_resp_send(req, "{\"status\":\"error\",\"msg\":\"ota write failed\"}", -1);
+        }
+        remain -= (size_t)got;
+    }
+    if (esp_ota_end(ota) != ESP_OK || esp_ota_set_boot_partition(part) != ESP_OK) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        return httpd_resp_send(req, "{\"status\":\"error\",\"msg\":\"image invalid\"}", -1);
+    }
+    ESP_LOGI(TAG_STA, "OTA 写入并通过校验，1s 后重启进新固件");
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, "{\"status\":\"ok\",\"msg\":\"done, rebooting\"}", -1);
+    web_schedule_reboot(1000);
+    return ESP_OK;
+}
+
+/* ---- POST /api/reboot ---- */
+static esp_err_t sta_reboot_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, "{\"status\":\"ok\"}", -1);
+    web_schedule_reboot(500);
+    return ESP_OK;
+}
+
+/* ================================================================ */
 /*  公共 API                                                        */
 /* ================================================================ */
 
@@ -529,7 +650,8 @@ esp_err_t wifi_config_server_start(void)
     }
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.max_uri_handlers = 3;
+    cfg.max_uri_handlers = 4;
+    cfg.stack_size = 8192;   /* OTA 收包走静态缓冲，栈适度放宽 */
 
     if (httpd_start(&s_ap_server, &cfg) != ESP_OK) {
         ESP_LOGE(TAG_AP, "AP server start failed");
@@ -540,8 +662,9 @@ esp_err_t wifi_config_server_start(void)
         { .uri = "/",    .method = HTTP_GET,  .handler = ap_root_handler,  .user_ctx = NULL },
         { .uri = "/scan", .method = HTTP_GET,  .handler = ap_scan_handler,  .user_ctx = NULL },
         { .uri = "/save", .method = HTTP_POST, .handler = ap_save_handler,  .user_ctx = NULL },
+        { .uri = "/ota", .method = HTTP_POST, .handler = ota_handler,      .user_ctx = NULL },
     };
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         httpd_register_uri_handler(s_ap_server, &uris[i]);
     }
 
@@ -562,8 +685,9 @@ esp_err_t web_server_start(void)
     }
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.max_uri_handlers = 5;
+    cfg.max_uri_handlers = 7;
     cfg.ctrl_port = 32769;    /* 默认 32768 已被 metrics_server 占用 */
+    cfg.stack_size = 8192;    /* OTA 收包走静态缓冲，栈适当放宽 */
 
     if (httpd_start(&s_sta_server, &cfg) != ESP_OK) {
         ESP_LOGE(TAG_STA, "STA web server start failed");
@@ -576,8 +700,10 @@ esp_err_t web_server_start(void)
         { .uri = "/api/config", .method = HTTP_GET,  .handler = sta_config_get_handler,  .user_ctx = NULL },
         { .uri = "/api/config", .method = HTTP_POST, .handler = sta_config_post_handler, .user_ctx = NULL },
         { .uri = "/api/reload", .method = HTTP_POST, .handler = sta_reload_handler,      .user_ctx = NULL },
+        { .uri = "/ota",        .method = HTTP_POST, .handler = ota_handler,             .user_ctx = NULL },
+        { .uri = "/api/reboot", .method = HTTP_POST, .handler = sta_reboot_handler,      .user_ctx = NULL },
     };
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 7; i++) {
         httpd_register_uri_handler(s_sta_server, &uris[i]);
     }
 

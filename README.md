@@ -42,6 +42,16 @@ Once connected, the device exposes two HTTP ports:
 | 9090 | `/metrics` | Prometheus metrics for all configured targets |
 | 9090 | `/probe?target=X&module=Y` | On-demand probe (no config needed) |
 | 80 | `/` | Web dashboard for configuration |
+| 80 | `POST /ota` | Firmware upload (OTA dual-slot, on both AP portal & STA dashboard; verified image swaps slot and reboots, invalid image keeps old firmware) |
+| 80 | `POST /api/reboot` | Reboot device |
+
+OTA / watchdog notes (2026-09-24): partition table switched to dual OTA slots
+(`ota_0`/`ota_1` 1344K each + `otadata`); **`storage` (SPIFFS) moved to
+0x2b0000 — first re-flash with the new table loses the on-device config JSON**
+(re-provision via web UI). `probe_task` subscribes to the task watchdog with a
+30s timeout (probes are synchronous network calls), panic → reboot self-recovery.
+App binary currently leaves only ~10% headroom in a slot — shrink `storage`
+first if it outgrows.
 
 ### On-demand Probing
 

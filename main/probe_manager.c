@@ -12,6 +12,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_task_wdt.h"
 #include "config_manager.h"
 
 static const char *TAG = "PROBE_MGR";
@@ -69,6 +70,10 @@ static probe_result_t dispatch_probe(const probe_target_t *target,
  */
 static void probe_task(void *pvParameters)
 {
+    /* 挂看门狗：探测为同步网络调用（模块超时可到秒级），全局超时放宽到
+     * 30s（sdkconfig CONFIG_ESP_TASK_WDT_TIMEOUT_S=30）；卡死 >30s panic 重启自恢复 */
+    esp_task_wdt_add(NULL);
+
     const probe_target_t *targets = NULL;
     const probe_module_t *modules = NULL;
     uint8_t target_count = 0;
@@ -80,6 +85,7 @@ static void probe_task(void *pvParameters)
     s_last_config_version = config_get_version();
 
     while (1) {
+        esp_task_wdt_reset();
         /* 热加载检测 */
         uint8_t cur_version = config_get_version();
         if (cur_version != s_last_config_version) {
