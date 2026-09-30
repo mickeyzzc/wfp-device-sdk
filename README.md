@@ -53,7 +53,7 @@ happens; no code is written ahead of real hardware.
 
 devid is supplied by each port implementer (ESP=MAC/efuse, STM32=96-bit UID,
 RP2040=board unique ID). Protocol contract: `docs/wfp-protocol.md` in the
-homepulse platform repo (not public yet; link to be added).
+homepulse platform repo (mickeyzzc/homepulse, private).
 
 ## The blackbox project
 

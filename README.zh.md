@@ -48,8 +48,8 @@ wfp-device-sdk/
 | `kv_load/kv_store` | 校准等持久键值 | ESP: NVS；STM32: flash 页；RP2040: sdk flash |
 
 devid 由各端口实现者提供（ESP=MAC/efuse、STM32=96bit UID、RP2040=板级
-唯一 ID）。协议契约：homepulse 平台仓 `docs/wfp-protocol.md`（平台仓
-暂未公开，公开后补链）。
+唯一 ID）。协议契约：`docs/wfp-protocol.md`（homepulse 平台仓
+mickeyzzc/homepulse，私有）。
 
 ## blackbox 项目
 
