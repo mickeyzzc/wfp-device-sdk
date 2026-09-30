@@ -1,134 +1,69 @@
-# ESP32 Blackbox
+# wfp-device-sdk
 
-[English](README.md) | [中文](README.zh.md)
+**[English](README.md) | [中文](README.zh.md)**
 
-A lightweight network probing device for ESP32, compatible with Prometheus blackbox_exporter. Configure probes via JSON or Web UI, and get metrics in standard Prometheus format.
+**Shared board-side SDK home for the homepulse home-IoT platform** — the
+common implementation of the WFP device protocol across MCUs (wfp-core
+portable C99 + per-SDK ports + ESP common parts), plus the first board
+project **blackbox** (an ESP32 network probing terminal). Target audience:
+ESP32 (IDF), STM32 (HAL/Cube) and RP2040 (Pico SDK) board projects.
 
-## Supported Hardware
+> Repo history: formed by merging the standalone `wfp-device-sdk` skeleton
+> into the former `esp32-blackbox` repo (2026-09-30); old URLs redirect.
 
-| Board | Chip | WiFi | Onboard LED |
-|-------|------|------|-------------|
-| ESP32-C3 SuperMini | ESP32-C3 160MHz | 802.11 b/g/n | GPIO8 (active-low) |
-| Seeed Studio XIAO ESP32C6 | ESP32-C6 160MHz | 802.11ax (WiFi 6) | GPIO15 (active-high) |
-
-## Quick Start
-
-### Build & Flash
-
-```bash
-# Python script (recommended, cross-platform)
-python build.py esp32c6 build
-python build.py esp32c6 flash COM3
-
-# Or use ESP-IDF CLI directly (after sourcing export.sh)
-idf.py set-target esp32c6
-idf.py build
-idf.py -p COM3 flash monitor
-```
-
-### First Boot
-
-1. Device creates WiFi hotspot `ESP32_Blackbox` (password: `12345678`)
-2. Connect and open `http://192.168.4.1`
-3. Scan networks, enter your WiFi credentials, save
-4. Device reboots and connects to your WiFi
-
-## Probe Endpoints
-
-Once connected, the device exposes two HTTP ports:
-
-| Port | Endpoint | Description |
-|------|----------|-------------|
-| 9090 | `/metrics` | Prometheus metrics for all configured targets |
-| 9090 | `/probe?target=X&module=Y` | On-demand probe (no config needed) |
-| 80 | `/` | Web dashboard for configuration |
-| 80 | `POST /ota` | Firmware upload (OTA dual-slot, on both AP portal & STA dashboard; verified image swaps slot and reboots, invalid image keeps old firmware) |
-| 80 | `POST /api/reboot` | Reboot device |
-
-OTA / watchdog notes (2026-09-24): partition table switched to dual OTA slots
-(`ota_0`/`ota_1` 1344K each + `otadata`); **`storage` (SPIFFS) moved to
-0x2b0000 — first re-flash with the new table loses the on-device config JSON**
-(re-provision via web UI). `probe_task` subscribes to the task watchdog with a
-30s timeout (probes are synchronous network calls), panic → reboot self-recovery.
-App binary currently leaves only ~10% headroom in a slot — shrink `storage`
-first if it outgrows.
-
-### On-demand Probing
-
-Probe any target instantly without modifying config:
-
-```bash
-# HTTP probe
-curl "http://192.168.61.150:9090/probe?target=httpbin.org&module=http_2xx"
-
-# DNS resolution
-curl "http://192.168.61.150:9090/probe?target=8.8.8.8&module=dns"
-
-# TCP port check
-curl "http://192.168.61.150:9090/probe?target=example.com&module=tcp&port=443"
-
-# ICMP ping
-curl "http://192.168.61.150:9090/probe?target=8.8.8.8&module=icmp_ping"
-```
-
-Returns standard Prometheus format:
+## Layout
 
 ```
-probe_success{target="httpbin.org",module="http_2xx"} 1
-probe_duration_seconds{target="httpbin.org",module="http_2xx"} 0.234
+wfp-device-sdk/
+├── wfp-core/            # Portable C99: line protocol codec / hello·caps /
+│   │                    # command dispatch / ACK·ERR / calibration — zero
+│   ├── include/wfp.h    # SDK deps. Three port hooks + API (skeleton;
+│   └── src/wfp.c        # finalized with the first real extraction)
+├── ports/               # Per-SDK ports (future): thin adapters — serial/TCP
+│                        # IO, kv=NVS/flash, millisecond clock
+└── blackbox/            # First board project: ESP32 network probing
+                         # terminal (Prometheus-compatible, self-contained)
 ```
 
-### Prometheus Integration
+**One repo, many functions, take only what you need**: each function is its
+own directory with its own CMake target, and dependencies flow one way
+(`esp/ → ports/ → wfp-core`). A project links only the components it uses —
+unreferenced parts never get compiled. An STM32 or RP2040 board takes
+`wfp-core` plus its own thin port and carries zero ESP code.
 
-```yaml
-scrape_configs:
-  - job_name: 'blackbox'
-    metrics_path: /probe
-    params:
-      module: [http_2xx]
-    static_configs:
-      - targets:
-          - example.com
-          - httpbin.org
-    relabel_configs:
-      - source_labels: [__address__]
-        target_label: __param_target
-      - source_labels: [__param_target]
-        target_label: instance
-      - target_label: __address__
-        replacement: 192.168.61.150:9090
-```
+## The extraction ladder
 
-## Supported Probe Modules
+1. **Isomorphic**: same-function code across board projects keeps identical
+   names and structure (`main` / `app_<capability>` / protocol endpoint /
+   console skeleton);
+2. **Copy & adapt**: the second board copies verbatim, then adapts;
+3. **Extract**: when a third board needs it or the logic stabilizes, it moves
+   into this repo — **extracting too early freezes experimental code**.
 
-| Module | Protocol | Description |
-|--------|----------|-------------|
-| `http_2xx` | HTTP/HTTPS | HTTP GET/POST with status code validation |
-| `tcp` | TCP | TCP connection test |
-| `dns` | DNS | DNS resolution test |
-| `icmp_ping` | ICMP | ICMP Ping (native socket) |
-| `ws` | WebSocket | WebSocket connection test |
-| `wss` | WebSocket Secure | WebSocket + TLS |
+wfp-core is currently a skeleton, filled in as the first real extraction
+happens; no code is written ahead of real hardware.
 
-## LED Status Indicator
+## wfp-core port hooks (only three)
 
-| State | Pattern |
-|-------|---------|
-| Booting | Fast blink |
-| AP Mode (config) | Slow blink |
-| Connecting WiFi | Medium blink |
-| Connected | Solid on |
-| Disconnected | Fast blink |
-| Connection Failed | 3x blink + 1s pause |
+| Hook | Purpose | Per-platform landing |
+|---|---|---|
+| `send_line` | Emit one line (telemetry/ACK/ERR) | ESP: usb_serial_jtag/UART/TCP; STM32: CDC/UART; RP2040: stdio_usb |
+| `now_ms` | Monotonic milliseconds (`t_ms` field) | Each SDK's tick |
+| `kv_load/kv_store` | Persistent key-value (calibration etc.) | ESP: NVS; STM32: flash page; RP2040: sdk flash |
 
-## Documentation
+devid is supplied by each port implementer (ESP=MAC/efuse, STM32=96-bit UID,
+RP2040=board unique ID). Protocol contract: `docs/wfp-protocol.md` in the
+homepulse platform repo (not public yet; link to be added).
 
-| Document | Description |
-|----------|-------------|
-| [Usage Guide](docs/en/usage.md) | Environment setup, build, flash, configuration, Prometheus integration |
-| [Architecture](docs/en/architecture.md) | System architecture, module design, data flow |
-| [Design](docs/en/design.md) | Technical decisions, probe module internals |
+## The blackbox project
 
-## License
+An ESP32 network probing terminal — Prometheus blackbox_exporter compatible
+(ICMP/TCP/HTTP/DNS/WS probes + metrics endpoint + web config + OTA).
+Supports the ESP32-C3 SuperMini and the Seeed XIAO ESP32-C6. See
+[blackbox/README.md](blackbox/README.md).
 
-MIT
+## Consumption
+
+Start by **copying into your board project** (each board stays independently
+buildable); decide the distribution mechanism later (ESP-IDF component
+manager / CMake FetchContent / git subtree).

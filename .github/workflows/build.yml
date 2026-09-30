@@ -29,6 +29,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set target and build firmware
+        working-directory: blackbox
         run: |
           . $IDF_PATH/export.sh
           idf.py set-target ${{ matrix.target }}
@@ -38,9 +39,9 @@ jobs:
         run: |
           TARGET="${{ matrix.target }}"
 
-          cp build/esp32-blackbox.bin "esp32-blackbox-${TARGET}.bin"
-          cp build/bootloader/bootloader.bin "bootloader-${TARGET}.bin"
-          cp build/partition_table/partition-table.bin "partition-table-${TARGET}.bin"
+          cp blackbox/build/esp32-blackbox.bin "esp32-blackbox-${TARGET}.bin"
+          cp blackbox/build/bootloader/bootloader.bin "bootloader-${TARGET}.bin"
+          cp blackbox/build/partition_table/partition-table.bin "partition-table-${TARGET}.bin"
 
           echo "=== Firmware files ==="
           ls -lh "esp32-blackbox-${TARGET}.bin" \
