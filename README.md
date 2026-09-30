@@ -62,6 +62,22 @@ An ESP32 network probing terminal — Prometheus blackbox_exporter compatible
 Supports the ESP32-C3 SuperMini and the Seeed XIAO ESP32-C6. See
 [blackbox/README.md](blackbox/README.md).
 
+## Firmware baseline norms (mandatory fleet-wide)
+
+Two baselines are mandatory for every MiBee firmware repo, and every board
+project living under this SDK must satisfy them:
+
+1. **Watchdog: mandatory.** No naked main loops — tasks subscribe to the
+   ESP-IDF task watchdog (TWDT) and feed it periodically (on RP2040, enable
+   the hardware watchdog instead).
+2. **Web/API firmware upgrade (OTA): mandatory where the hardware allows.**
+   Networked boards with room for OTA slots must ship a web upgrade path;
+   wired flashing (serialtap/esptool) is the recovery path, not a substitute.
+
+| Project | Watchdog | Web/API OTA |
+|---------|----------|-------------|
+| blackbox | ✅ per-task TWDT (`esp_task_wdt_add`/`reset`) | ✅ OTA slots + web upgrade |
+
 ## Consumption
 
 Start by **copying into your board project** (each board stays independently

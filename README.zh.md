@@ -57,6 +57,20 @@ ESP32 网络探测终端——Prometheus blackbox_exporter 兼容（ICMP/TCP/HTT
 DNS/WS 探测 + 指标端点 + Web 配置 + OTA）。支持 ESP32-C3 SuperMini 与
 Seeed XIAO ESP32-C6。详见 [blackbox/README.zh.md](blackbox/README.zh.md)。
 
+## 固件基线规范（全家桶强制）
+
+两条基线对所有 MiBee 固件仓强制执行，本 SDK 之下的**每个板端项目**都必须满足：
+
+1. **看门狗：必须启用**。不允许裸奔主循环——任务订阅 ESP-IDF 任务看门狗
+   （TWDT）并按周期喂狗（RP2040 则启用硬件看门狗）；
+2. **Web/API 固件升级（OTA）：硬件允许则必须提供**。有网络、flash 放得下
+   OTA 槽的板子必须带板端 web 升级；有线烧录（serialtap/esptool）是兜底
+   恢复手段，不能替代 OTA。
+
+| 项目 | 看门狗 | Web/API OTA |
+|------|--------|-------------|
+| blackbox | ✅ 任务订阅 TWDT（`esp_task_wdt_add`/`reset`） | ✅ OTA 槽 + 板端 web 升级 |
+
 ## 消费方式
 
 起步**拷贝入板项目**（各板独立可编译原则不变）；成熟后再定分发机制
